@@ -1,0 +1,399 @@
+1. Structure du projet
+
+Par exemple :
+
+ton-projet/
+  .env
+  package.json
+  server.js
+  public/
+    index.html
+    app.js
+
+2. Installation (Node.js côté serveur)
+
+Fichier .env (à la racine) :
+
+FINNHUB_API_KEY=d4mulp9r01qsn6g8h2m0d4mulp9r01qsn6g8h2mg
+PORT=3000
+
+
+⚠️ Ne mets jamais ta clé Finnhub dans le JavaScript du navigateur, seulement en .env côté serveur.
+
+3. Backend en JavaScript : server.js
+
+Ce serveur fait 3 choses :
+
+Sert les fichiers statiques du dossier public/
+
+Expose une route REST /api/candles qui appelle Finnhub /stock/candle
+
+Ouvre un WebSocket vers Finnhub et rebroadcaste les trades vers les clients navigateurs.
+
+// server.js
+require('dotenv').config();
+const express = require('express');
+const axios = require('axios');
+const WebSocket = require('ws');
+const http = require('http');
+const path = require('path');
+const cors = require('cors');
+
+const FINNHUB_TOKEN = process.env.FINNHUB_API_KEY;
+const FINNHUB_API_BASE = 'https://finnhub.io/api/v1';
+const FINNHUB_WS_URL = `wss://ws.finnhub.io/?token=${FINNHUB_TOKEN}`; // URL officielle 
+
+if (!FINNHUB_TOKEN) {
+  console.error('❌ FINNHUB_API_KEY manquant dans .env');
+  process.exit(1);
+}
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Servir le frontend
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ---------- Route REST pour les candles (historique) ----------
+app.get('/api/candles', async (req, res) => {
+  try {
+    const symbol = req.query.symbol || 'AAPL';
+    const resolution = req.query.resolution || '5'; // 5 minutes
+    const from = req.query.from;
+    const to = req.query.to;
+
+    if (!from || !to) {
+      return res
+        .status(400)
+        .json({ error: '`from` et `to` (UNIX en secondes) sont obligatoires' });
+    }
+
+    const response = await axios.get(`${FINNHUB_API_BASE}/stock/candle`, {
+      params: {
+        symbol,
+        resolution,
+        from,
+        to,
+        token: FINNHUB_TOKEN,
+      },
+    });
+
+    // Finnhub renvoie c,h,l,o,s,t,v pour les candles 
+    res.json(response.data);
+  } catch (err) {
+    console.error('Erreur candles Finnhub:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Erreur lors de la récupération des candles' });
+  }
+});
+
+// ---------- WebSocket : Finnhub <-> Clients navigateurs ----------
+const server = http.createServer(app);
+
+// WebSocket server pour les navigateurs
+const wss = new WebSocket.Server({ server });
+
+// Socket vers Finnhub
+let finnhubSocket = null;
+let currentSymbol = 'AAPL'; // symbole par défaut
+
+function subscribeToSymbol(symbol) {
+  if (finnhubSocket && finnhubSocket.readyState === WebSocket.OPEN) {
+    console.log('Souscription Finnhub au symbole :', symbol);
+    finnhubSocket.send(JSON.stringify({ type: 'subscribe', symbol }));
+  }
+}
+
+function connectFinnhub() {
+  console.log('Connexion au WebSocket Finnhub…');
+  finnhubSocket = new WebSocket(FINNHUB_WS_URL);
+
+  finnhubSocket.on('open', () => {
+    console.log('✅ Connecté au WebSocket Finnhub');
+    subscribeToSymbol(currentSymbol);
+  });
+
+  finnhubSocket.on('message', (data) => {
+    // data est une string JSON de Finnhub comme {"type":"trade","data":[...]} :contentReference[oaicite:5]{index=5}
+    // On la rebalance telle quelle à tous les clients connectés
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(data.toString());
+      }
+    });
+  });
+
+  finnhubSocket.on('close', () => {
+    console.log('❌ Finnhub WS fermé. Reconnexion dans 3s…');
+    setTimeout(connectFinnhub, 3000);
+  });
+
+  finnhubSocket.on('error', (err) => {
+    console.error('Erreur Finnhub WS:', err.message);
+    try {
+      finnhubSocket.close();
+    } catch (e) {
+      // ignore
+    }
+  });
+}
+
+connectFinnhub();
+
+// Quand un navigateur se connecte en WebSocket sur notre serveur
+wss.on('connection', (socket) => {
+  console.log('🌐 Client navigateur connecté au WS');
+
+  // Le client peut demander un changement de symbole :
+  // { "type": "set-symbol", "symbol": "TSLA" }
+  socket.on('message', (msg) => {
+    try {
+      const parsed = JSON.parse(msg.toString());
+      if (parsed.type === 'set-symbol' && typeof parsed.symbol === 'string') {
+        currentSymbol = parsed.symbol.toUpperCase();
+        console.log('Symbole demandé par le client :', currentSymbol);
+        subscribeToSymbol(currentSymbol);
+      }
+    } catch (e) {
+      console.error('Message WS client invalide:', e.message);
+    }
+  });
+
+  socket.on('close', () => {
+    console.log('Client navigateur déconnecté du WS');
+  });
+});
+
+// Lancement du serveur HTTP
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Serveur démarré sur http://localhost:${PORT}`);
+});
+
+4. Frontend : public/index.html
+
+Un HTML simple avec :
+
+un champ pour le symbole,
+
+un bouton pour charger l’historique,
+
+un canvas Chart.js pour le graphique,
+
+un petit tableau pour quelques ticks temps réel.
+
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Finnhub JS Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <h1>Actions en temps réel (Finnhub + JS)</h1>
+
+    <div>
+      <label for="symbol">Symbole :</label>
+      <input id="symbol" type="text" value="AAPL" />
+      <button id="load-history">Charger historique (5 derniers jours)</button>
+    </div>
+
+    <h2>Historique (candles)</h2>
+    <canvas id="priceChart" width="600" height="300"></canvas>
+
+    <h2>Temps réel (trades)</h2>
+    <table border="1">
+      <thead>
+        <tr>
+          <th>Heure</th>
+          <th>Symbole</th>
+          <th>Prix</th>
+          <th>Volume</th>
+        </tr>
+      </thead>
+      <tbody id="realtime-body"></tbody>
+    </table>
+
+    <!-- Chart.js via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
+
+5. Frontend JS : public/app.js
+
+Ce fichier :
+
+Charge l’historique via fetch('/api/candles?...')
+
+Dessine un graphique avec Chart.js
+
+Ouvre un WebSocket vers ws://localhost:3000 (ton serveur)
+
+Affiche les trades temps réel dans la table
+
+Permet de changer de symbole (et notifie le serveur via WS)
+
+// public/app.js
+
+const symbolInput = document.getElementById('symbol');
+const loadHistoryBtn = document.getElementById('load-history');
+const realtimeBody = document.getElementById('realtime-body');
+
+let priceChart = null;
+
+// ---------- Historique (candles) ----------
+async function loadHistory() {
+  const symbol = symbolInput.value.trim().toUpperCase() || 'AAPL';
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const fiveDaysAgoSec = nowSec - 5 * 24 * 60 * 60;
+
+  const params = new URLSearchParams({
+    symbol,
+    resolution: '30', // 30 minutes
+    from: fiveDaysAgoSec.toString(),
+    to: nowSec.toString(),
+  });
+
+  try {
+    const res = await fetch(`/api/candles?${params.toString()}`);
+    const data = await res.json();
+
+    if (data.s !== 'ok') {
+      console.error('Réponse Finnhub candles non ok:', data);
+      alert('Impossible de charger les données historiques');
+      return;
+    }
+
+    // data.t = timestamps, data.c = close prices, etc. 
+    const labels = data.t.map((ts) =>
+      new Date(ts * 1000).toLocaleString('fr-FR')
+    );
+    const prices = data.c;
+
+    drawChart(labels, prices, symbol);
+  } catch (err) {
+    console.error('Erreur loadHistory:', err);
+    alert('Erreur lors du chargement de l’historique');
+  }
+}
+
+function drawChart(labels, prices, symbol) {
+  const ctx = document.getElementById('priceChart').getContext('2d');
+
+  if (priceChart) {
+    priceChart.destroy();
+  }
+
+  priceChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: `Prix de clôture ${symbol}`,
+          data: prices,
+          borderWidth: 1,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: {
+          ticks: {
+            maxTicksLimit: 10,
+          },
+        },
+      },
+    },
+  });
+}
+
+loadHistoryBtn.addEventListener('click', loadHistory);
+
+// Charger direct à l'ouverture
+loadHistory();
+
+// ---------- WebSocket temps réel ----------
+let ws = null;
+
+function connectWebSocket() {
+  const symbol = symbolInput.value.trim().toUpperCase() || 'AAPL';
+  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl = `${protocol}://${window.location.host}`;
+
+  ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    console.log('WS navigateur connecté au serveur');
+    // Indiquer au serveur le symbole souhaité
+    ws.send(JSON.stringify({ type: 'set-symbol', symbol }));
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+
+      // Finnhub envoie des messages type "trade" avec un tableau "data" :contentReference[oaicite:7]{index=7}
+      if (msg.type === 'trade' && Array.isArray(msg.data)) {
+        msg.data.forEach((trade) => {
+          addRealtimeRow(trade);
+        });
+      }
+    } catch (e) {
+      console.error('Message WS invalide:', e);
+    }
+  };
+
+  ws.onclose = () => {
+    console.log('WS fermé. Reconnexion dans 3s…');
+    setTimeout(connectWebSocket, 3000);
+  };
+
+  ws.onerror = (err) => {
+    console.error('WS error:', err);
+  };
+}
+
+function addRealtimeRow(trade) {
+  // trade.t = timestamp, trade.s = symbol, trade.p = price, trade.v = volume, etc. :contentReference[oaicite:8]{index=8}
+  const tr = document.createElement('tr');
+
+  const timeTd = document.createElement('td');
+  const symTd = document.createElement('td');
+  const priceTd = document.createElement('td');
+  const volTd = document.createElement('td');
+
+  const date = new Date(trade.t);
+  timeTd.textContent = date.toLocaleTimeString('fr-FR');
+  symTd.textContent = trade.s;
+  priceTd.textContent = trade.p;
+  volTd.textContent = trade.v;
+
+  tr.appendChild(timeTd);
+  tr.appendChild(symTd);
+  tr.appendChild(priceTd);
+  tr.appendChild(volTd);
+
+  // Ajouter en haut du tableau
+  realtimeBody.insertBefore(tr, realtimeBody.firstChild);
+
+  // Limiter à 50 lignes
+  while (realtimeBody.rows.length > 50) {
+    realtimeBody.deleteRow(realtimeBody.rows.length - 1);
+  }
+}
+
+// Reconnecter / changer de symbole quand on clique sur "Charger historique"
+loadHistoryBtn.addEventListener('click', () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const symbol = symbolInput.value.trim().toUpperCase() || 'AAPL';
+    ws.send(JSON.stringify({ type: 'set-symbol', symbol }));
+  }
+});
+
+// Lancer la connexion WS au chargement
+connectWebSocket();

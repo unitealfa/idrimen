@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Finnhub JS Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231d3557'/%3E%3Cpath d='M16 36c12 6 20-4 32 2' stroke='%23f1faee' stroke-width='6' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='36' r='4' fill='%23e63946'/%3E%3Ccircle cx='48' cy='38' r='4' fill='%23a8dadc'/%3E%3C/svg%3E"
+    />
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #0b1221;
+        color: #e7ecf5;
+      }
+      h1,
+      h2 {
+        margin: 0 0 8px 0;
+      }
+      p {
+        margin: 0 0 12px 0;
+        color: #c7d2e2;
+      }
+      .panel {
+        background: #111a2f;
+        border: 1px solid #1f2a45;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+        margin-bottom: 18px;
+      }
+      label {
+        margin-right: 8px;
+      }
+      select {
+        border-radius: 8px;
+        border: 1px solid #2b3a5c;
+        background: #0f172a;
+        color: #e7ecf5;
+        padding: 8px 10px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        color: #e7ecf5;
+      }
+      th,
+      td {
+        border: 1px solid #1f2a45;
+        padding: 6px 8px;
+        text-align: left;
+      }
+      thead {
+        background: #152040;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Actions en temps reel (Finnhub + JS)</h1>
+
+    <div class="panel">
+      <label for="pair-select">Devise :</label>
+      <select id="pair-select"></select>
+      <p style="margin-top: 10px; margin-bottom: 0">
+        Flux trades en temps reel. Utilise une cle Finnhub valide ou un token
+        sandbox pour voir les donnees.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>Graphique temps reel</h2>
+      <div id="clock" style="margin-bottom: 8px; font-size: 14px; color: #a8b7d1;">
+        --
+      </div>
+      <div id="priceChart" style="height: 320px"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Temps reel (trades)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Heure</th>
+            <th>Symbole</th>
+            <th>Prix</th>
+            <th>Volume</th>
+          </tr>
+        </thead>
+        <tbody id="realtime-body"></tbody>
+      </table>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
